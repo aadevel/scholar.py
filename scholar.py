@@ -7,12 +7,6 @@ page. It is not a recursive crawler.
 # ChangeLog
 # ---------
 #
-# 2.11  The Scholar site seems to have become more picky about the
-#       number of results requested. The default of 20 in scholar.py
-#       could cause HTTP 503 responses. scholar.py now doesn't request
-#       a maximum unless you provide it at the comment line. (For the
-#       time being, you still cannot request more than 20 results.)
-#
 # 2.10  Merged a fix for the "TypError: quote_from_bytes()" problem on
 #       Python 3.x from hinnefe2.
 #
@@ -135,7 +129,7 @@ page. It is not a recursive crawler.
 #
 # Don't complain about missing docstrings: pylint: disable-msg=C0111
 #
-# Copyright 2010--2017 Christian Kreibich. All rights reserved.
+# Copyright 2010--2014 Christian Kreibich. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -163,9 +157,8 @@ page. It is not a recursive crawler.
 
 import optparse
 import os
-import re
 import sys
-import warnings
+import re
 
 try:
     # Try importing for Python 3
@@ -214,35 +207,17 @@ class QueryArgumentError(Error):
     """A query did not have a suitable set of arguments."""
 
 
-class SoupKitchen(object):
-    """Factory for creating BeautifulSoup instances."""
-
-    @staticmethod
-    def make_soup(markup, parser=None):
-        """Factory method returning a BeautifulSoup instance. The created
-        instance will use a parser of the given name, if supported by
-        the underlying BeautifulSoup instance.
-        """
-        if 'bs4' in sys.modules:
-            # We support parser specification. If the caller didn't
-            # specify one, leave it to BeautifulSoup to pick the most
-            # suitable one, but suppress the user warning that asks to
-            # select the most suitable parser ... which BS then
-            # selects anyway.
-            if parser is None:
-                warnings.filterwarnings('ignore', 'No parser was explicitly specified')
-            return BeautifulSoup(markup, parser)
-
-        return BeautifulSoup(markup)
-
 class ScholarConf(object):
     """Helper class for global settings."""
 
     VERSION = '2.10'
     LOG_LEVEL = 1
-    MAX_PAGE_RESULTS = 10 # Current default for per-page results
+    MAX_PAGE_RESULTS = 20 # Current maximum for per-page results
     SCHOLAR_SITE = 'http://scholar.google.com'
-
+    #SCHOLAR_SITE = 'http://scholar.google.com/scholar?cites=2154044325322404904&as_sdt=2005&sciodt=0,5&hl=en'
+    #SCHOLAR_SITE = None
+    #SCHOLAR_SITE = 'https://scholar.google.com/scholar?cites=3657711476251587119&as_sdt=2005&sciodt=0,5&hl=en'
+    print SCHOLAR_SITE
     # USER_AGENT = 'Mozilla/5.0 (X11; U; FreeBSD i386; en-US; rv:1.9.2.9) Gecko/20100913 Firefox/3.6.9'
     # Let's update at this point (3/14):
     USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:27.0) Gecko/20100101 Firefox/27.0'
@@ -366,6 +341,7 @@ class ScholarArticleParser(object):
         self.soup = None
         self.article = None
         self.site = site or ScholarConf.SCHOLAR_SITE
+	#print self.site
         self.year_re = re.compile(r'\b(?:20|19)\d{2}\b')
 
     def handle_article(self, art):
@@ -387,7 +363,7 @@ class ScholarArticleParser(object):
         content as needed, and notifies the parser instance of
         resulting instances via the handle_article callback.
         """
-        self.soup = SoupKitchen.make_soup(html)
+        self.soup = BeautifulSoup(html)
 
         # This parses any global, non-itemized attributes from the page.
         self._parse_globals()
@@ -632,7 +608,7 @@ class ScholarQuery(object):
         # The number of results requested from Scholar -- not the
         # total number of results it reports (the latter gets stored
         # in attrs, see below).
-        self.num_results = None
+        self.num_results = ScholarConf.MAX_PAGE_RESULTS
 
         # Queries may have global result attributes, similar to
         # per-article attributes in ScholarArticle. The exact set of
@@ -641,9 +617,8 @@ class ScholarQuery(object):
         self.attrs = {}
 
     def set_num_page_results(self, num_page_results):
-        self.num_results = ScholarUtils.ensure_int(
-            num_page_results,
-            'maximum number of results on page must be numeric')
+        msg = 'maximum number of results on page must be numeric'
+        self.num_results = ScholarUtils.ensure_int(num_page_results, msg)
 
     def get_url(self):
         """
@@ -708,7 +683,7 @@ class ClusterScholarQuery(ScholarQuery):
     """
     SCHOLAR_CLUSTER_URL = ScholarConf.SCHOLAR_SITE + '/scholar?' \
         + 'cluster=%(cluster)s' \
-        + '%(num)s'
+        + '&num=%(num)s'
 
     def __init__(self, cluster=None):
         ScholarQuery.__init__(self)
@@ -727,15 +702,11 @@ class ClusterScholarQuery(ScholarQuery):
         if self.cluster is None:
             raise QueryArgumentError('cluster query needs cluster ID')
 
-        urlargs = {'cluster': self.cluster }
+        urlargs = {'cluster': self.cluster,
+                   'num': self.num_results or ScholarConf.MAX_PAGE_RESULTS}
 
         for key, val in urlargs.items():
             urlargs[key] = quote(encode(val))
-
-        # The following URL arguments must not be quoted, or the
-        # server will not recognize them:
-        urlargs['num'] = ('&num=%d' % self.num_results
-                          if self.num_results is not None else '')
 
         return self.SCHOLAR_CLUSTER_URL % urlargs
 
@@ -755,10 +726,10 @@ class SearchScholarQuery(ScholarQuery):
         + '&as_publication=%(pub)s' \
         + '&as_ylo=%(ylo)s' \
         + '&as_yhi=%(yhi)s' \
+        + '&as_sdt=%(patents)s%%2C5' \
         + '&as_vis=%(citations)s' \
         + '&btnG=&hl=en' \
-        + '%(num)s' \
-        + '&as_sdt=%(patents)s%%2C5'
+        + '&num=%(num)s'
 
     def __init__(self):
         ScholarQuery.__init__(self)
@@ -768,7 +739,7 @@ class SearchScholarQuery(ScholarQuery):
         self.words_none = None # None of these words
         self.phrase = None
         self.scope_title = False # If True, search in title only
-        self.author = None
+        self.author = None 
         self.pub = None
         self.timeframe = [None, None]
         self.include_patents = True
@@ -852,20 +823,17 @@ class SearchScholarQuery(ScholarQuery):
                    'ylo': self.timeframe[0] or '',
                    'yhi': self.timeframe[1] or '',
                    'patents': '0' if self.include_patents else '1',
-                   'citations': '0' if self.include_citations else '1'}
+                   'citations': '0' if self.include_citations else '1',
+                   'num': self.num_results or ScholarConf.MAX_PAGE_RESULTS}
 
         for key, val in urlargs.items():
             urlargs[key] = quote(encode(val))
-
-        # The following URL arguments must not be quoted, or the
-        # server will not recognize them:
-        urlargs['num'] = ('&num=%d' % self.num_results
-                          if self.num_results is not None else '')
 
         return self.SCHOLAR_QUERY_URL % urlargs
 
 
 class ScholarSettings(object):
+
     """
     This class lets you adjust the Scholar settings for your
     session. It's intended to mirror the features tunable in the
@@ -879,22 +847,22 @@ class ScholarSettings(object):
 
     def __init__(self):
         self.citform = 0 # Citation format, default none
-        self.per_page_results = None
+        self.per_page_results = ScholarConf.MAX_PAGE_RESULTS
         self._is_configured = False
 
     def set_citation_format(self, citform):
         citform = ScholarUtils.ensure_int(citform)
         if citform < 0 or citform > self.CITFORM_BIBTEX:
-            raise FormatError('citation format invalid, is "%s"'
+            raise FormatError('citation format invalid, is "%s"' \
                               % citform)
         self.citform = citform
         self._is_configured = True
 
     def set_per_page_results(self, per_page_results):
-        self.per_page_results = ScholarUtils.ensure_int(
-            per_page_results, 'page results must be integer')
-        self.per_page_results = min(
-            self.per_page_results, ScholarConf.MAX_PAGE_RESULTS)
+        msg = 'page results must be integer'
+        self.per_page_results = ScholarUtils.ensure_int(per_page_results, msg)
+        self.per_page_results = min(self.per_page_results,
+                                    ScholarConf.MAX_PAGE_RESULTS)
         self._is_configured = True
 
     def is_configured(self):
@@ -902,6 +870,7 @@ class ScholarSettings(object):
 
 
 class ScholarQuerier(object):
+
     """
     ScholarQuerier instances can conduct a search on Google Scholar
     with subsequent parsing of the resulting HTML content.  The
@@ -980,7 +949,7 @@ class ScholarQuerier(object):
         # Now parse the required stuff out of the form. We require the
         # "scisig" token to make the upload of our settings acceptable
         # to Google.
-        soup = SoupKitchen.make_soup(html)
+        soup = BeautifulSoup(html)
 
         tag = soup.find(name='form', attrs={'id': 'gs_settings_form'})
         if tag is None:
@@ -1022,6 +991,24 @@ class ScholarQuerier(object):
                                        log_msg='dump of query response HTML',
                                        err_msg='results retrieval failed')
         if html is None:
+            return
+
+        self.parse(html)
+
+    def explore_citedby(self, citedbylink):
+        """
+        This method initiates a search query (a ScholarQuery instance)
+        with subsequent parsing of the response.
+        """
+        self.clear_articles()
+        #self.query = query
+        
+        html = self._get_http_response(url=citedbylink,
+                                       log_msg='dump of query response HTML',
+                                       err_msg='results retrieval failed')
+        #html=citedbylink
+
+	if html is None:
             return
 
         self.parse(html)
@@ -1191,6 +1178,12 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
                      help='Do not search, just use articles in given cluster ID')
     group.add_option('-c', '--count', type='int', default=None,
                      help='Maximum number of results')
+    group.add_option('-E', '--explorecitedby', default=False,
+                     help='ExploreCitedBy')
+  
+    #group.add_option('-H', '--homepage', metavar='HOMEPAGE', default='http://scholar.google.com',
+    #                 help='HOMEPAGE TO SEARCH')
+
     parser.add_option_group(group)
 
     group = optparse.OptionGroup(parser, 'Output format',
@@ -1234,6 +1227,11 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
 
     if options.cookie_file:
         ScholarConf.COOKIE_JAR_FILE = options.cookie_file
+
+    #if options.homepage:
+    #	print options.homepage
+    #	ScholarConf.SCHOLAR_SITE = options.homepage
+    # 	print ScholarConf.SCHOLAR_SITE
 
     # Sanity-check the options: if they include a cluster ID query, it
     # makes no sense to have search arguments:
@@ -1290,7 +1288,10 @@ scholar.py -c 5 -a "albert einstein" -t --none "quantum theory" --after 1970"""
         options.count = min(options.count, ScholarConf.MAX_PAGE_RESULTS)
         query.set_num_page_results(options.count)
 
-    querier.send_query(query)
+    if options.explorecitedby:
+	    querier.explore_citedby(options.explorecitedby)
+    else:
+	    querier.send_query(query)
 
     if options.csv:
         csv(querier)
